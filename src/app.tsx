@@ -1,73 +1,127 @@
 import express, { Application, Request, Response } from 'express';
+import sqlite3 from 'sqlite3';
+import { open } from 'sqlite';
 
 const app: Application = express();
 app.use(express.json());
 
-interface Employee {
-  id: number;
-  name: string;
-  position: string;
+// SQLite3 database setup
+const dbPromise = open({
+  filename: './database.db',
+  driver: sqlite3.Database
+});
+
+// Initialize database
+async function initializeDB() {
+  const db = await dbPromise;
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS employees (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      position TEXT NOT NULL
+    )
+  `);
 }
+initializeDB();
 
-let employees: Employee[] = [
-  { id: 1, name: "Ali", position: "Manager" }
-];
-
-// POST route to add employee
-app.post('/employees', (req: Request, res: Response) => {
-  const newEmployee: Employee = {
-    id: employees.length + 1,
-    name: req.body.name,
-    position: req.body.position
-  };
-  employees.push(newEmployee);
-  res.send('Employee added!');
-});
-
-// GET route to fetch one employee
-app.get('/employees/:id', (req: Request, res: Response) => {
-  const id = parseInt(req.params.id);
-  const employee = employees.find(emp => emp.id === id);
-
-  if (!employee) {
-    return res.status(404).send("Employee not found");
+// Routes
+// POST - Create employee
+app.post('/employees', async (req: Request, res: Response) => {
+  try {
+    const db = await dbPromise;
+    const { name, position } = req.body;
+    
+    const result = await db.run(
+      'INSERT INTO employees (name, position) VALUES (?, ?)',
+      [name, position]
+    );
+    
+    res.status(201).json({
+      id: result.lastID,
+      name,
+      position
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Invalid request';
+    res.status(400).json({ error: message });
   }
-
-  res.send(employee);
 });
 
-// PUT route to update employee
-app.put('/employees/:id', (req: Request<{ id: string }, {}, Partial<Employee>>, res: Response) => {
-  const id = parseInt(req.params.id);
-  const employeeIndex = employees.findIndex(emp => emp.id === id);
-
-  if (employeeIndex === -1) {
-    return res.status(404).send("Employee not found");
+// GET - All employees
+app.get('/employees', async (req: Request, res: Response) => {
+  try {
+    const db = await dbPromise;
+    const employees = await db.all('SELECT * FROM employees');
+    res.json(employees);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Server error';
+    res.status(500).json({ error: message });
   }
-
-  // Merge existing data with updates
-  employees[employeeIndex] = { 
-    ...employees[employeeIndex], 
-    ...req.body 
-  };
-
-  res.send(employees[employeeIndex]);
 });
 
-// DELETE route to remove employee
-app.delete('/employees/:id', (req: Request<{ id: string }>, res: Response) => {
-  const id = parseInt(req.params.id);
-  const initialLength = employees.length;
-  
-  employees = employees.filter(emp => emp.id !== id);
-  
-  if (employees.length === initialLength) {
-    return res.status(404).send("Employee not found");
+// GET - Single employee
+app.get('/employees/:id', async (req: Request, res: Response) => {
+  try {
+    const db = await dbPromise;
+    const employee = await db.get(
+      'SELECT * FROM employees WHERE id = ?',
+      [req.params.id]
+    );
+    
+    if (!employee) {
+      return res.status(404).json({ error: 'Employee not found' });
+    }
+    
+    res.json(employee);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Server error';
+    res.status(500).json({ error: message });
   }
-  
-  res.send("Employee deleted successfully");
 });
 
+// PUT - Update employee
+app.put('/employees/:id', async (req: Request, res: Response) => {
+  try {
+    const db = await dbPromise;
+    const { name, position } = req.body;
+    
+    const result = await db.run(
+      'UPDATE employees SET name = ?, position = ? WHERE id = ?',
+      [name, position, req.params.id]
+    );
+    
+    if (result.changes === 0) {
+      return res.status(404).json({ error: 'Employee not found' });
+    }
+    
+    res.json({ id: req.params.id, name, position });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Invalid request';
+    res.status(400).json({ error: message });
+  }
+});
+
+// DELETE - Remove employee
+app.delete('/employees/:id', async (req: Request, res: Response) => {
+  try {
+    const db = await dbPromise;
+    const result = await db.run(
+      'DELETE FROM employees WHERE id = ?',
+      [req.params.id]
+    );
+    
+    if (result.changes === 0) {
+      return res.status(404).json({ error: 'Employee not found' });
+    }
+    
+    res.json({ message: 'Employee deleted successfully' });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Server error';
+    res.status(500).json({ error: message });
+  }
+});
+
+// Start server
 app.listen(3000, () => {
-  console.log('Server running: http://localhost:3000');
+  console.log('🚀 Server running: http://localhost:3000');
 });
