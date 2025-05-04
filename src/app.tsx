@@ -1,6 +1,7 @@
 import express, { Application, Request, Response } from 'express';
 import sqlite3 from 'sqlite3';
 import { open } from 'sqlite';
+import { z } from 'zod';
 
 const app: Application = express();
 app.use(express.json());
@@ -9,6 +10,12 @@ app.use(express.json());
 const dbPromise = open({
   filename: './database.db',
   driver: sqlite3.Database
+});
+
+// Add validation schema here 👇
+const employeeSchema = z.object({
+  name: z.string().min(2, "Name must be at least 2 characters"),
+  position: z.string().min(2, "Position cannot be empty")
 });
 
 // Initialize database
@@ -28,20 +35,28 @@ initializeDB();
 // POST - Create employee
 app.post('/employees', async (req: Request, res: Response) => {
   try {
-    const db = await dbPromise;
-    const { name, position } = req.body;
+    // Validate request body 👇
+    const validatedData = employeeSchema.parse(req.body);
     
+    const db = await dbPromise;    
     const result = await db.run(
       'INSERT INTO employees (name, position) VALUES (?, ?)',
-      [name, position]
+      [validatedData.name, validatedData.position]
     );
     
-    res.status(201).json({
+    res.status(201).json({ 
       id: result.lastID,
-      name,
-      position
+      ...validatedData 
     });
+    
   } catch (error) {
+    // Add Zod error handling 👇
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ 
+        error: "Validation failed",
+        details: error.errors 
+      });
+    }
     const message = error instanceof Error ? error.message : 'Invalid request';
     res.status(400).json({ error: message });
   }
@@ -82,20 +97,32 @@ app.get('/employees/:id', async (req: Request, res: Response) => {
 // PUT - Update employee
 app.put('/employees/:id', async (req: Request, res: Response) => {
   try {
-    const db = await dbPromise;
-    const { name, position } = req.body;
+    // Validate request body 👇
+    const validatedData = employeeSchema.parse(req.body);
     
+    const db = await dbPromise;
     const result = await db.run(
       'UPDATE employees SET name = ?, position = ? WHERE id = ?',
-      [name, position, req.params.id]
+      [validatedData.name, validatedData.position, req.params.id]
     );
     
     if (result.changes === 0) {
       return res.status(404).json({ error: 'Employee not found' });
     }
     
-    res.json({ id: req.params.id, name, position });
+    res.json({ 
+      id: req.params.id, 
+      ...validatedData 
+    });
+    
   } catch (error) {
+    // Add Zod error handling 👇
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ 
+        error: "Validation failed",
+        details: error.errors 
+      });
+    }
     const message = error instanceof Error ? error.message : 'Invalid request';
     res.status(400).json({ error: message });
   }
