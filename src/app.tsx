@@ -1,15 +1,15 @@
 import express, { Application, Request, Response } from 'express';
-import sqlite3 from 'sqlite3';
-import { open } from 'sqlite';
+import mysql from 'mysql2/promise';
+import { Connection } from 'mysql2/promise';
 import { z } from 'zod';
 
 const app: Application = express();
 app.use(express.json());
 
-// SQLite3 database setup
-const dbPromise = open({
-  filename: './database.db',
-  driver: sqlite3.Database
+// MySQL connection pool:
+const pool = mysql.createPool({
+  uri: process.env.DATABASE_URL || 'mysql://employee_user:password123@localhost:3306/employee_db',
+  connectionLimit: 10
 });
 
 // Add validation schema here 👇
@@ -20,33 +20,32 @@ const employeeSchema = z.object({
 
 // Initialize database
 async function initializeDB() {
-  const db = await dbPromise;
-  await db.exec(`
+  const conn = await pool.getConnection();
+  await conn.query(`
     CREATE TABLE IF NOT EXISTS employees (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      position TEXT NOT NULL
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      name VARCHAR(255) NOT NULL,
+      position VARCHAR(255) NOT NULL
     )
   `);
+  conn.release();
 }
+
 initializeDB();
 
 // Routes
 // POST - Create employee
 app.post('/employees', async (req: Request, res: Response) => {
   try {
-    // Validate request body 👇
     const validatedData = employeeSchema.parse(req.body);
-    
-    const db = await dbPromise;    
-    const result = await db.run(
+    const [result] = await pool.query(
       'INSERT INTO employees (name, position) VALUES (?, ?)',
       [validatedData.name, validatedData.position]
     );
     
-    res.status(201).json({ 
-      id: result.lastID,
-      ...validatedData 
+    res.status(201).json({
+      id: (result as any).insertId,
+      ...validatedData
     });
     
   } catch (error) {
@@ -65,9 +64,8 @@ app.post('/employees', async (req: Request, res: Response) => {
 // GET - All employees
 app.get('/employees', async (req: Request, res: Response) => {
   try {
-    const db = await dbPromise;
-    const employees = await db.all('SELECT * FROM employees');
-    res.json(employees);
+    const [rows] = await pool.query('SELECT * FROM employees');
+    res.json(rows);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Server error';
     res.status(500).json({ error: message });
@@ -77,17 +75,16 @@ app.get('/employees', async (req: Request, res: Response) => {
 // GET - Single employee
 app.get('/employees/:id', async (req: Request, res: Response) => {
   try {
-    const db = await dbPromise;
-    const employee = await db.get(
+    const [rows] = await pool.query(
       'SELECT * FROM employees WHERE id = ?',
       [req.params.id]
     );
     
-    if (!employee) {
+    if ((rows as any).length === 0) {
       return res.status(404).json({ error: 'Employee not found' });
     }
     
-    res.json(employee);
+    res.json((rows as any)[0]);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Server error';
     res.status(500).json({ error: message });
@@ -97,16 +94,13 @@ app.get('/employees/:id', async (req: Request, res: Response) => {
 // PUT - Update employee
 app.put('/employees/:id', async (req: Request, res: Response) => {
   try {
-    // Validate request body 👇
     const validatedData = employeeSchema.parse(req.body);
-    
-    const db = await dbPromise;
-    const result = await db.run(
+    const [result] = await pool.query(
       'UPDATE employees SET name = ?, position = ? WHERE id = ?',
       [validatedData.name, validatedData.position, req.params.id]
     );
     
-    if (result.changes === 0) {
+    if ((result as any).affectedRows === 0) {
       return res.status(404).json({ error: 'Employee not found' });
     }
     
@@ -114,7 +108,6 @@ app.put('/employees/:id', async (req: Request, res: Response) => {
       id: req.params.id, 
       ...validatedData 
     });
-    
   } catch (error) {
     // Add Zod error handling 👇
     if (error instanceof z.ZodError) {
@@ -131,13 +124,12 @@ app.put('/employees/:id', async (req: Request, res: Response) => {
 // DELETE - Remove employee
 app.delete('/employees/:id', async (req: Request, res: Response) => {
   try {
-    const db = await dbPromise;
-    const result = await db.run(
+    const [result] = await pool.query(
       'DELETE FROM employees WHERE id = ?',
       [req.params.id]
     );
     
-    if (result.changes === 0) {
+    if ((result as any).affectedRows === 0) {
       return res.status(404).json({ error: 'Employee not found' });
     }
     
